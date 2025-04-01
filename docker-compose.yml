@@ -1,0 +1,50 @@
+version: '3'
+services:
+  canary:
+    build:
+      context: .
+      dockerfile: ./canary_model/Dockerfile
+    ports:
+      - "5001:5001"
+    networks:
+      - ml-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  model:
+    build:
+      context: .
+      dockerfile: ./main_model/Dockerfile
+    ports:
+      - "5000:5000"
+    networks:
+      - ml-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  elector:
+    build:
+      context: .
+      dockerfile: ./elector/Dockerfile
+    ports:
+      - "5002:5002"
+    networks:
+      - ml-network
+    depends_on:
+      - canary
+      - model
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  ml-network:
+    driver: bridge

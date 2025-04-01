@@ -1,0 +1,28 @@
+# canary-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: canary
+  namespace: kubeflow
+spec:
+  selector:
+    matchLabels:
+      run: canary
+  replicas: 2
+  template:
+    metadata:
+      labels:
+        run: canary
+    spec:
+      containers:
+      - name: canary
+        image: ${YOUR_DOCKER_USERNAME}/canary:latest
+        ports:
+        - containerPort: 5001
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"

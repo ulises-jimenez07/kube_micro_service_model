@@ -1,0 +1,28 @@
+# model-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: model
+  namespace: kubeflow
+spec:
+  selector:
+    matchLabels:
+      run: model
+  replicas: 2
+  template:
+    metadata:
+      labels:
+        run: model
+    spec:
+      containers:
+      - name: model
+        image: ${YOUR_DOCKER_USERNAME}/model:latest
+        ports:
+        - containerPort: 5000
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
