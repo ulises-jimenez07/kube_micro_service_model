@@ -1,13 +1,13 @@
-# FastAPI conversion of flask_elector.py
+# FastAPI version of flask_elector.py
 import asyncio
 import json
 import time
 import aiohttp
 import logging
+import os
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 from typing import Dict, Any, List, Optional
-import socket
 
 # Set up logging
 FORMAT = "[%(asctime)-15s][%(levelname)-8s]%(message)s"
@@ -61,21 +61,20 @@ async def esperar_respuestas(modelos):
     return resultados
 
 
-# Determine if we're running in containers or locally
-def is_container_env():
-    try:
-        # Try to resolve the canary hostname to see if we're in a container environment
-        socket.gethostbyname("canary")
-        return True
-    except socket.gaierror:
-        return False
+# Determine if we're running in Docker
+def is_docker_env():
+    # In Docker Compose, check if environment shows we're in Docker
+    # This is a simple check - in Docker, the hostname is usually the container ID
+    return os.path.exists("/.dockerenv")
 
 
 # Get the appropriate URLs based on environment
 def get_service_urls():
-    if is_container_env():
+    if is_docker_env():
+        # In Docker Compose, use the service names
         return {"canary": "http://canary:5001", "model": "http://model:5000"}
     else:
+        # For local development
         return {"canary": "http://localhost:5001", "model": "http://localhost:5000"}
 
 
@@ -104,18 +103,25 @@ def trata_resultados(resultados):
 
     logger.info(f"Checking for response from {model_url}")
 
+    # First, check if we have any responses at all
+    valid_responses = [r for r in resultados if r is not None]
+    if not valid_responses:
+        logger.warning("No valid responses received from any model")
+        return respuesta
+
+    # Look for the main model response
     for resultado in resultados:
-        logger.info(f"Processing result from {resultado[1] if resultado else 'None'}")
         if resultado is not None:
+            logger.info(f"Processing result from {resultado[1]}")
             if resultado[1] == model_url:
                 respuesta = resultado[0]
+                logger.info("Using main model response")
+                break
 
     # If we didn't get a response from the main model, use the first valid response
-    if respuesta == "Sin resultado de modelos":
-        for resultado in resultados:
-            if resultado is not None:
-                respuesta = resultado[0]
-                break
+    if respuesta == "Sin resultado de modelos" and valid_responses:
+        respuesta = valid_responses[0][0]
+        logger.info(f"Falling back to response from {valid_responses[0][1]}")
 
     return respuesta
 
@@ -140,10 +146,21 @@ async def predict(data: IrisData):
     try:
         data_dict = data.dict()
         respuesta = await get_datos(data_dict)
+        # Handle the case where we got no valid responses
+        if respuesta == "Sin resultado de modelos":
+            raise HTTPException(status_code=503, detail="No models available for prediction")
         return json.loads(respuesta)
+    except json.JSONDecodeError as ex:
+        logger.error(f"Error decoding JSON response: {str(ex)}")
+        raise HTTPException(status_code=500, detail="Invalid response from models")
     except Exception as ex:
         logger.error(f"Error in predict endpoint: {str(ex)}")
         raise HTTPException(status_code=400, detail=str(ex))
+
+
+@app.get("/health")
+async def health():
+    return {"status": "healthy"}
 
 
 if __name__ == "__main__":
