@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
       - name: model
-        image: ${YOUR_DOCKER_USERNAME}/model:latest
+        image: ${IMAGE_PLACEHOLDER}
         ports:
         - containerPort: 5000
         resources:

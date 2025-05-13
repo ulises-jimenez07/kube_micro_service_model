@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
       - name: elector
-        image: ${YOUR_DOCKER_USERNAME}/elector:latest
+        image: ${IMAGE_PLACEHOLDER}
         ports:
         - containerPort: 5002
         resources:

@@ -7,10 +7,12 @@ This repository contains code and configuration for deploying machine learning m
 This project implements a three-component ML system:
 
 1. **Main Model**: The primary ML model service (Iris classifier)
-2. **Canary Model**: A secondary model service for A/B testing  
+2. **Canary Model**: A secondary model service for A/B testing
 3. **Elector Service**: A routing service that directs traffic between models
 
 The architecture allows for safe deployments through canary releases, where a small percentage of traffic is routed to a new model version before full rollout.
+
+The project uses Google Cloud Artifact Registry for container image storage and distribution, with Kubernetes configurations for deployment to GKE or Minikube.
 
 ## Repository Structure
 
@@ -42,31 +44,36 @@ The architecture allows for safe deployments through canary releases, where a sm
 
 - Google Cloud Platform account
 - Google Cloud SDK
+- GCP Artifact Registry API enabled
 - Docker and Docker Compose
 - Python 3.9+
 
 ### Setting Up GCP VM
 
 ```bash
+# Set up environment variables
+export PROJECT_ID=your-gcp-project-id
+export LOCATION=us-central1  # Choose appropriate region
+export REPOSITORY=ml-models  # Name of your Artifact Registry repository
+
 # Create a VM instance with sufficient resources for Docker and Kubernetes
 gcloud compute instances create ml-deployment-vm \
-  --project=your-project-id \
-  --zone=us-central1-a \
+  --project=$PROJECT_ID \
+  --zone=$LOCATION-a \
   --machine-type=e2-standard-4 \
   --image-family=ubuntu-2004-lts \
   --image-project=ubuntu-os-cloud \
-  --boot-disk-size=50GB \
   --boot-disk-type=pd-ssd
 
 # Add a label to the VM for organization
 gcloud compute instances add-labels ml-deployment-vm \
-  --project=your-project-id \
-  --zone=us-central1-a \
+  --project=$PROJECT_ID \
+  --zone=$LOCATION-a \
   --labels=environment=development,project=ml-deployment
 
 # Create a firewall rule to allow Minikube dashboard access (port 30000-32767 for NodePort services)
 gcloud compute firewall-rules create allow-minikube-dashboard \
-  --project=your-project-id \
+  --project=$PROJECT_ID \
   --direction=INGRESS \
   --priority=1000 \
   --network=default \
@@ -77,12 +84,12 @@ gcloud compute firewall-rules create allow-minikube-dashboard \
 
 # Add the network tag to the VM
 gcloud compute instances add-tags ml-deployment-vm \
-  --project=your-project-id \
-  --zone=us-central1-a \
+  --project=$PROJECT_ID \
+  --zone=$LOCATION-a \
   --tags=ml-deployment-vm
 
 # SSH into the VM
-gcloud compute ssh ml-deployment-vm --project=your-project-id --zone=us-central1-a
+gcloud compute ssh ml-deployment-vm --project=$PROJECT_ID --zone=$LOCATION-a
 ```
 
 ### Installing Dependencies
@@ -93,11 +100,11 @@ sudo apt-get update
 
 # Install Docker prerequisites
 sudo apt-get install -y \
-    apt-transport-https \
-    ca-certificates \
-    curl \
-    gnupg \
-    lsb-release
+  apt-transport-https \
+  ca-certificates \
+  curl \
+  gnupg \
+  lsb-release
 
 # Add Docker's official GPG key
 curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
@@ -135,8 +142,7 @@ pip install "fastapi[standard]" pandas scikit-learn aiohttp
 
 1. Clone this repository and create project structure:
    ```bash
-   mkdir -p ml_deployment/{canary_model,main_model,elector}
-   cd ml_deployment
+   git clone https://github.com/ulises-jimenez07/kube_micro_service_model.git
    ```
 
 2. Create the requirements.txt file:
@@ -274,31 +280,42 @@ minikube status
 
 1. Create Kubernetes YAML files in a k8s directory as described in the guide.
 
-2. Build and push Docker images:
+2. Build and push Docker images to GCP Artifact Registry:
    ```bash
-   # Log in to Docker Hub
-   docker login
+   # Set up environment variables
+   export PROJECT_ID=your-gcp-project-id
+   export LOCATION=us-central1  # Choose appropriate region
+   export REPOSITORY=ml-models  # Name of your Artifact Registry repository
+
+   # Create Artifact Registry repository if it doesn't exist
+   gcloud artifacts repositories create $REPOSITORY \
+     --repository-format=docker \
+     --location=$LOCATION \
+     --description="ML model container images"
+
+   # Configure Docker to use Google Cloud as a credential helper
+   gcloud auth configure-docker $LOCATION-docker.pkg.dev
 
    # Build and push images
-   export DOCKER_USERNAME=your-dockerhub-username
-
    # Canary model
-   docker build -t $DOCKER_USERNAME/canary:latest -f canary_model/Dockerfile .
-   docker push $DOCKER_USERNAME/canary:latest
+   docker build -t $LOCATION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/canary:latest -f canary_model/Dockerfile .
+   docker push $LOCATION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/canary:latest
 
    # Main model
-   docker build -t $DOCKER_USERNAME/model:latest -f main_model/Dockerfile .
-   docker push $DOCKER_USERNAME/model:latest
+   docker build -t $LOCATION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/model:latest -f main_model/Dockerfile .
+   docker push $LOCATION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/model:latest
 
    # Elector
-   docker build -t $DOCKER_USERNAME/elector:latest -f elector/Dockerfile .
-   docker push $DOCKER_USERNAME/elector:latest
+   docker build -t $LOCATION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/elector:latest -f elector/Dockerfile .
+   docker push $LOCATION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/elector:latest
    ```
 
 3. Apply Kubernetes configurations:
    ```bash
-   # Update YAML files with your Docker username
-   sed -i "s/\${YOUR_DOCKER_USERNAME}/$DOCKER_USERNAME/g" k8s/*.yaml
+   # Update YAML files with your Artifact Registry image paths
+   sed -i "s|${IMAGE_PLACEHOLDER}|$LOCATION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/canary:latest|g" k8s/canary-deployment.yaml
+   sed -i "s|${IMAGE_PLACEHOLDER}|$LOCATION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/model:latest|g" k8s/model-deployment.yaml
+   sed -i "s|${IMAGE_PLACEHOLDER}|$LOCATION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/elector:latest|g" k8s/elector-deployment.yaml
 
    # Apply the configurations
    kubectl apply -f k8s/canary-deployment.yaml
@@ -418,11 +435,77 @@ minikube stop
 minikube delete
 
 # Stop GCP instance when not in use
-gcloud compute instances stop ml-deployment-vm --project=your-project-id --zone=us-central1-a
+gcloud compute instances stop ml-deployment-vm --project=$PROJECT_ID --zone=$LOCATION-a
 
 # Delete GCP instance when project is complete
-gcloud compute instances delete ml-deployment-vm --project=your-project-id --zone=us-central1-a
+gcloud compute instances delete ml-deployment-vm --project=$PROJECT_ID --zone=$LOCATION-a
 ```
+
+## GCP Artifact Registry
+
+Google Cloud Artifact Registry is the container image repository used in this project. It provides a single location for managing container images and language packages:
+
+### Setting Up Artifact Registry
+
+1. **Enable the Artifact Registry API**:
+   ```bash
+   gcloud services enable artifactregistry.googleapis.com
+   ```
+
+2. **Create a repository**:
+   ```bash
+   export PROJECT_ID=$(gcloud config get-value project)
+   export LOCATION=us-central1  # Choose appropriate region
+   export REPOSITORY=ml-models  # Name for your repository
+
+   gcloud artifacts repositories create $REPOSITORY \
+     --repository-format=docker \
+     --location=$LOCATION \
+     --description="ML model container images"
+   ```
+
+3. **Configure Docker authentication**:
+   ```bash
+   gcloud auth configure-docker $LOCATION-docker.pkg.dev
+   ```
+
+### Building and Pushing Images to Artifact Registry
+
+```bash
+# Build images with Artifact Registry path
+docker build -t $LOCATION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/canary:latest -f canary_model/Dockerfile .
+docker build -t $LOCATION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/model:latest -f main_model/Dockerfile .
+docker build -t $LOCATION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/elector:latest -f elector/Dockerfile .
+
+# Push images to Artifact Registry
+docker push $LOCATION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/canary:latest
+docker push $LOCATION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/model:latest
+docker push $LOCATION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/elector:latest
+```
+
+### Updating Kubernetes Manifests for Artifact Registry
+
+The Kubernetes YAML files in this project use a placeholder `${IMAGE_PLACEHOLDER}` that can be replaced with your Artifact Registry image path:
+
+```bash
+# Set environment variables
+export PROJECT_ID=$(gcloud config get-value project)
+export LOCATION=us-central1
+export REPOSITORY=ml-models
+
+# Update YAML files with Artifact Registry image paths
+sed -i "s|${IMAGE_PLACEHOLDER}|$LOCATION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/canary:latest|g" k8s/canary-deployment.yaml
+sed -i "s|${IMAGE_PLACEHOLDER}|$LOCATION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/model:latest|g" k8s/model-deployment.yaml
+sed -i "s|${IMAGE_PLACEHOLDER}|$LOCATION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/elector:latest|g" k8s/elector-deployment.yaml
+```
+
+### Benefits of Using Artifact Registry
+
+- **Security**: Private, access-controlled repositories
+- **Integration**: Seamless integration with Google Cloud services
+- **Scalability**: Handles large volumes of artifacts
+- **Proximity**: Regional repositories for faster deployments
+- **Vulnerability Scanning**: Built-in container scanning
 
 ## License
 

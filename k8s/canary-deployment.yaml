@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
       - name: canary
-        image: ${YOUR_DOCKER_USERNAME}/canary:latest
+        image: ${IMAGE_PLACEHOLDER}
         ports:
         - containerPort: 5001
         resources:
