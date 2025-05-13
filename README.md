@@ -63,7 +63,9 @@ gcloud compute instances create ml-deployment-vm \
   --machine-type=e2-standard-4 \
   --image-family=ubuntu-2004-lts \
   --image-project=ubuntu-os-cloud \
-  --boot-disk-type=pd-ssd
+  --boot-disk-type=pd-ssd \
+  --boot-disk-size=30GB \
+  --scopes=https://www.googleapis.com/auth/cloud-platform
 
 # Add a label to the VM for organization
 gcloud compute instances add-labels ml-deployment-vm \
@@ -127,6 +129,9 @@ newgrp docker
 # Verify Docker installation
 docker --version
 
+# Install Docker compose
+sudo apt-get  install docker-compose 
+
 # Install Python and FastAPI
 sudo apt-get install -y python3 python3-pip python3-venv
 
@@ -143,14 +148,18 @@ pip install "fastapi[standard]" pandas scikit-learn aiohttp
 1. Clone this repository and create project structure:
    ```bash
    git clone https://github.com/ulises-jimenez07/kube_micro_service_model.git
+   cd kube_micro_service_model
    ```
 
 2. Create the requirements.txt file:
    ```
-   fastapi[standard]==0.95.1
-   pandas==1.5.3
-   scikit-learn==1.2.2
-   aiohttp==3.8.4
+    fastapi[standard]
+    uvicorn
+    numpy
+    pandas
+    scikit-learn
+    aiohttp
+    httpx
    ```
 
 3. Create the FastAPI applications for each service (canary_model/app.py, main_model/app.py, elector/app.py) as shown in the guide.
@@ -187,7 +196,7 @@ pip install "fastapi[standard]" pandas scikit-learn aiohttp
 
 ### Running with Docker Compose
 
-1. Create Dockerfiles for each service as shown in the guide.
+1. Create Dockerfiles for each service.
 
 2. Create a docker-compose.yml file:
    ```yaml
@@ -287,6 +296,9 @@ minikube status
    export LOCATION=us-central1  # Choose appropriate region
    export REPOSITORY=ml-models  # Name of your Artifact Registry repository
 
+   # Enable the Artifact Registry API
+   gcloud services enable artifactregistry.googleapis.com
+
    # Create Artifact Registry repository if it doesn't exist
    gcloud artifacts repositories create $REPOSITORY \
      --repository-format=docker \
@@ -313,9 +325,12 @@ minikube status
 3. Apply Kubernetes configurations:
    ```bash
    # Update YAML files with your Artifact Registry image paths
-   sed -i "s|${IMAGE_PLACEHOLDER}|$LOCATION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/canary:latest|g" k8s/canary-deployment.yaml
-   sed -i "s|${IMAGE_PLACEHOLDER}|$LOCATION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/model:latest|g" k8s/model-deployment.yaml
-   sed -i "s|${IMAGE_PLACEHOLDER}|$LOCATION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/elector:latest|g" k8s/elector-deployment.yaml
+   sed -i "s|\${IMAGE_PLACEHOLDER}|$LOCATION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/canary:latest|g" k8s/canary-deployment.yaml
+   sed -i "s|\${IMAGE_PLACEHOLDER}|$LOCATION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/model:latest|g" k8s/model-deployment.yaml
+   sed -i "s|\${IMAGE_PLACEHOLDER}|$LOCATION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/elector:latest|g" k8s/elector-deployment.yaml
+
+   # Create the kubeflow namespace
+   kubectl create namespace kubeflow
 
    # Apply the configurations
    kubectl apply -f k8s/canary-deployment.yaml
@@ -325,16 +340,16 @@ minikube status
    kubectl apply -f k8s/elector-deployment.yaml
    kubectl apply -f k8s/elector-svc.yaml
 
-   # Check deployments
-   kubectl get deployments
-   kubectl get services
-   kubectl get pods
+   # Check deployments (specify the kubeflow namespace)
+   kubectl get deployments -n kubeflow
+   kubectl get services -n kubeflow
+   kubectl get pods -n kubeflow
    ```
 
 4. Test the deployment:
    ```bash
-   # Get the NodePort for elector service
-   NODE_PORT=$(kubectl get svc elector -o jsonpath='{.spec.ports[0].nodePort}')
+   # Get the NodePort for elector service (specify the kubeflow namespace)
+   NODE_PORT=$(kubectl get svc elector -n kubeflow -o jsonpath='{.spec.ports[0].nodePort}')
    
    # Access the elector service
    curl -X POST "http://$(minikube ip):$NODE_PORT/predict" \
@@ -342,60 +357,26 @@ minikube status
      -d '{"s_l":5.9,"s_w":3,"p_l":5.1,"p_w":1.8}'
    ```
 
-## Kubeflow Integration
+   If you encounter connection issues, try these troubleshooting steps:
 
-For machine learning operations (MLOps), this project integrates with Kubeflow.
-
-### Installing Kubeflow
-
-```bash
-# Install kfctl
-wget https://github.com/kubeflow/kfctl/releases/download/v1.2.0/kfctl_v1.2.0-0-gbc038f9_linux.tar.gz
-tar -xvf kfctl_v1.2.0-0-gbc038f9_linux.tar.gz
-sudo mv kfctl /usr/local/bin/
-
-# Set up Kubeflow deployment
-export KF_NAME=kubeflow
-export BASE_DIR=${HOME}/kubeflow
-export KF_DIR=${BASE_DIR}/${KF_NAME}
-export CONFIG_URI="https://raw.githubusercontent.com/kubeflow/manifests/v1.2-branch/kfdef/kfctl_k8s_istio.v1.2.0.yaml"
-
-# Create directories
-mkdir -p ${KF_DIR}
-
-# Download configuration file and apply
-cd ${KF_DIR}
-kfctl apply -V -f ${CONFIG_URI}
-
-# Check Kubeflow installation
-kubectl get pods -n kubeflow
-```
-
-### Deploying Models with Kubeflow
-
-The Kubernetes YAML files in the guide already include the `namespace: kubeflow` specification for deployment to the Kubeflow namespace.
-
-Optional: For more advanced Kubeflow integration, you can use KFServing:
-
-```yaml
-apiVersion: "serving.kubeflow.org/v1beta1"
-kind: "InferenceService"
-metadata:
-  name: "iris-predictor"
-  namespace: kubeflow
-spec:
-  predictor:
-    tensorflow:
-      storageUri: "gs://your-bucket/iris_model/"
-```
-
-## API Documentation
-
-All services expose API documentation at the `/docs` endpoint using FastAPI's Swagger UI:
-
-- Main Model: `http://localhost:5000/docs`
-- Canary Model: `http://localhost:5001/docs`
-- Elector Service: `http://localhost:5002/docs`
+   ```bash
+   # Check if pods are running correctly
+   kubectl get pods -n kubeflow
+   
+   # Check logs for any pod (replace pod-name with actual pod name)
+   kubectl logs pod-name -n kubeflow
+   
+   # Alternative way to access the service using minikube
+   minikube service elector -n kubeflow --url
+   
+   # Then use the URL provided by the above command
+   curl -X POST "$(minikube service elector -n kubeflow --url)/predict" \
+     -H "Content-Type: application/json" \
+     -d '{"s_l":5.9,"s_w":3,"p_l":5.1,"p_w":1.8}'
+   
+   # If needed, ensure minikube tunnel is running (in a separate terminal)
+   minikube tunnel
+   ```
 
 ## Model Description
 
@@ -414,6 +395,210 @@ Both models predict the species of an iris flower based on four measurements:
 The models output probability distributions across the three Iris species.
 
 The Elector service intelligently routes between these models with a preference for the main model.
+
+## Troubleshooting Common Issues
+
+### ImagePullBackOff Error
+
+If you see `ImagePullBackOff` errors when checking your pods:
+
+```bash
+kubectl get pods -n kubeflow
+```
+
+This usually means Kubernetes can't pull the container images. This can happen if:
+
+1. The `${IMAGE_PLACEHOLDER}` in the YAML files wasn't replaced with actual image paths
+2. The specified images don't exist in the registry
+3. Minikube doesn't have access to the registry
+
+To fix this issue:
+
+#### Option 1: Use local Docker images with Minikube
+
+```bash
+# Build the images locally
+docker build -t canary:latest -f canary_model/Dockerfile .
+docker build -t model:latest -f main_model/Dockerfile .
+docker build -t elector:latest -f elector/Dockerfile .
+
+# Load the images into Minikube
+minikube image load canary:latest
+minikube image load model:latest
+minikube image load elector:latest
+
+# Update the YAML files to use the local images
+sed -i "s|\${IMAGE_PLACEHOLDER}|canary:latest|g" k8s/canary-deployment.yaml
+sed -i "s|\${IMAGE_PLACEHOLDER}|model:latest|g" k8s/model-deployment.yaml
+sed -i "s|\${IMAGE_PLACEHOLDER}|elector:latest|g" k8s/elector-deployment.yaml
+
+# Apply the configurations again
+kubectl apply -f k8s/canary-deployment.yaml
+kubectl apply -f k8s/canary-svc.yaml
+kubectl apply -f k8s/model-deployment.yaml
+kubectl apply -f k8s/model-svc.yaml
+kubectl apply -f k8s/elector-deployment.yaml
+kubectl apply -f k8s/elector-svc.yaml
+```
+
+#### Option 2: Use Minikube's Docker daemon
+
+```bash
+# Configure your terminal to use Minikube's Docker daemon
+eval $(minikube docker-env)
+
+# Build the images directly in Minikube's Docker daemon
+docker build -t canary:latest -f canary_model/Dockerfile .
+docker build -t model:latest -f main_model/Dockerfile .
+docker build -t elector:latest -f elector/Dockerfile .
+
+# Update the YAML files to use the local images
+sed -i "s|\${IMAGE_PLACEHOLDER}|canary:latest|g" k8s/canary-deployment.yaml
+sed -i "s|\${IMAGE_PLACEHOLDER}|model:latest|g" k8s/model-deployment.yaml
+sed -i "s|\${IMAGE_PLACEHOLDER}|elector:latest|g" k8s/elector-deployment.yaml
+
+# Update the YAML files to never pull the images
+# Add the following line under the image: line in each deployment YAML:
+# imagePullPolicy: Never
+
+# Apply the configurations again
+kubectl apply -f k8s/canary-deployment.yaml
+kubectl apply -f k8s/canary-svc.yaml
+kubectl apply -f k8s/model-deployment.yaml
+kubectl apply -f k8s/model-svc.yaml
+kubectl apply -f k8s/elector-deployment.yaml
+kubectl apply -f k8s/elector-svc.yaml
+```
+
+### Accessing GCP Artifact Registry from a Local Kubernetes Cluster
+
+To access Google Cloud Platform (GCP) Artifact Registry from a local Kubernetes cluster using a service account key file, you need to follow these steps:
+
+1. **Create a GCP Service Account and Key File**
+2. **Create a Kubernetes Secret with the Service Account Key**
+3. **Configure Your Kubernetes Deployment to Use the Secret**
+4. **Pull Images from Artifact Registry**
+
+#### Step-by-Step Guide
+
+##### 1. Create a GCP Service Account and Key File
+
+Create the Service Account:
+```bash
+gcloud iam service-accounts create my-service-account --display-name "My Service Account"
+```
+
+Grant the Necessary Roles to the Service Account:
+```bash
+gcloud projects add-iam-policy-binding <YOUR-PROJECT-ID> \
+    --member="serviceAccount:my-service-account@<YOUR-PROJECT-ID>.iam.gserviceaccount.com" \
+    --role="roles/artifactregistry.reader"
+```
+Replace `<YOUR-PROJECT-ID>` with your GCP project ID.
+
+Create and Download the Key File:
+```bash
+gcloud iam service-accounts keys create key.json \
+    --iam-account my-service-account@<YOUR-PROJECT-ID>.iam.gserviceaccount.com
+```
+
+##### 2. Create a Kubernetes Secret with the Service Account Key
+
+Create the Secret:
+```bash
+kubectl create secret docker-registry gcp-artifact-registry \
+    --docker-server=LOCATION-docker.pkg.dev \
+    --docker-username=_json_key \
+    --docker-password="$(cat key.json)" \
+    --docker-email=your-email@example.com
+```
+Replace:
+- `LOCATION` with the location of your Artifact Registry (e.g., us-central1).
+- `your-email@example.com` with your email.
+
+##### 3. Configure Your Kubernetes Deployment to Use the Secret
+
+Update your Kubernetes deployment YAML to reference the secret for pulling images.
+
+Update Deployment YAML:
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: my-app
+  template:
+    metadata:
+      labels:
+        app: my-app
+    spec:
+      containers:
+      - name: my-app
+        image: LOCATION-docker.pkg.dev/PROJECT-ID/REPOSITORY/IMAGE:TAG
+        ports:
+        - containerPort: 8080
+      imagePullSecrets:
+      - name: gcp-artifact-registry
+```
+Replace the placeholders:
+- `LOCATION` with your Artifact Registry location (e.g., us-central1).
+- `PROJECT-ID` with your GCP project ID.
+- `REPOSITORY` with the name of your repository.
+- `IMAGE:TAG` with the specific image and tag you want to use.
+
+Apply the Deployment:
+```bash
+kubectl apply -f deployment.yaml
+```
+
+##### 4. Verify the Setup
+
+Check the Deployment Status:
+```bash
+kubectl get pods
+```
+
+Describe a Pod to Verify Image Pull:
+```bash
+kubectl describe pod <POD-NAME>
+```
+Look for the events section to see if the image was pulled successfully.
+
+#### Option 2: Use Local Images Instead (Recommended for Development)
+
+The simplest solution is to use local images as described in the previous section, which avoids authentication issues entirely:
+
+```bash
+# Build the images locally
+docker build -t canary:latest -f canary_model/Dockerfile .
+docker build -t model:latest -f main_model/Dockerfile .
+docker build -t elector:latest -f elector/Dockerfile .
+
+# Update the YAML files to use the local images instead of GCP Artifact Registry
+sed -i "s|us-central1-docker.pkg.dev/test-minikube-455501/ml-models/canary:latest|canary:latest|g" k8s/canary-deployment.yaml
+sed -i "s|us-central1-docker.pkg.dev/test-minikube-455501/ml-models/model:latest|model:latest|g" k8s/model-deployment.yaml
+sed -i "s|us-central1-docker.pkg.dev/test-minikube-455501/ml-models/elector:latest|elector:latest|g" k8s/elector-deployment.yaml
+
+# Add imagePullPolicy: Never to each deployment
+# Add this line right after the image: line in each deployment YAML
+
+# Load the images into Minikube
+minikube image load canary:latest
+minikube image load model:latest
+minikube image load elector:latest
+
+# Apply the configurations again
+kubectl apply -f k8s/canary-deployment.yaml
+kubectl apply -f k8s/canary-svc.yaml
+kubectl apply -f k8s/model-deployment.yaml
+kubectl apply -f k8s/model-svc.yaml
+kubectl apply -f k8s/elector-deployment.yaml
+kubectl apply -f k8s/elector-svc.yaml
+```
 
 ## Monitoring and Maintenance
 
@@ -440,72 +625,6 @@ gcloud compute instances stop ml-deployment-vm --project=$PROJECT_ID --zone=$LOC
 # Delete GCP instance when project is complete
 gcloud compute instances delete ml-deployment-vm --project=$PROJECT_ID --zone=$LOCATION-a
 ```
-
-## GCP Artifact Registry
-
-Google Cloud Artifact Registry is the container image repository used in this project. It provides a single location for managing container images and language packages:
-
-### Setting Up Artifact Registry
-
-1. **Enable the Artifact Registry API**:
-   ```bash
-   gcloud services enable artifactregistry.googleapis.com
-   ```
-
-2. **Create a repository**:
-   ```bash
-   export PROJECT_ID=$(gcloud config get-value project)
-   export LOCATION=us-central1  # Choose appropriate region
-   export REPOSITORY=ml-models  # Name for your repository
-
-   gcloud artifacts repositories create $REPOSITORY \
-     --repository-format=docker \
-     --location=$LOCATION \
-     --description="ML model container images"
-   ```
-
-3. **Configure Docker authentication**:
-   ```bash
-   gcloud auth configure-docker $LOCATION-docker.pkg.dev
-   ```
-
-### Building and Pushing Images to Artifact Registry
-
-```bash
-# Build images with Artifact Registry path
-docker build -t $LOCATION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/canary:latest -f canary_model/Dockerfile .
-docker build -t $LOCATION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/model:latest -f main_model/Dockerfile .
-docker build -t $LOCATION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/elector:latest -f elector/Dockerfile .
-
-# Push images to Artifact Registry
-docker push $LOCATION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/canary:latest
-docker push $LOCATION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/model:latest
-docker push $LOCATION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/elector:latest
-```
-
-### Updating Kubernetes Manifests for Artifact Registry
-
-The Kubernetes YAML files in this project use a placeholder `${IMAGE_PLACEHOLDER}` that can be replaced with your Artifact Registry image path:
-
-```bash
-# Set environment variables
-export PROJECT_ID=$(gcloud config get-value project)
-export LOCATION=us-central1
-export REPOSITORY=ml-models
-
-# Update YAML files with Artifact Registry image paths
-sed -i "s|${IMAGE_PLACEHOLDER}|$LOCATION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/canary:latest|g" k8s/canary-deployment.yaml
-sed -i "s|${IMAGE_PLACEHOLDER}|$LOCATION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/model:latest|g" k8s/model-deployment.yaml
-sed -i "s|${IMAGE_PLACEHOLDER}|$LOCATION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/elector:latest|g" k8s/elector-deployment.yaml
-```
-
-### Benefits of Using Artifact Registry
-
-- **Security**: Private, access-controlled repositories
-- **Integration**: Seamless integration with Google Cloud services
-- **Scalability**: Handles large volumes of artifacts
-- **Proximity**: Regional repositories for faster deployments
-- **Vulnerability Scanning**: Built-in container scanning
 
 ## License
 
