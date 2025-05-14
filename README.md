@@ -1,6 +1,39 @@
 # ML Model Deployment Project
 
-This repository contains code and configuration for deploying machine learning models on Google Cloud Platform using FastAPI, Docker, and Kubeflow. It demonstrates a complete CI/CD pipeline for ML model deployment with canary releases.
+This repository contains code and configuration for deploying machine learning models on Kubernetes using FastAPI, Docker, Docker Compose, MiniKube and GCP.
+
+## Architecture diagram
+```mermaid
+graph LR
+    subgraph Main Model
+        A[FastAPI App Main Model]
+        B[GaussianNB Model]
+        A -- Predicts using --> B
+    end
+
+    subgraph Canary Model
+        C[FastAPI App Canary Model]
+        D[GaussianNB Model Variant]
+        C -- Predicts using --> D
+    end
+
+    subgraph Elector Service
+        E[FastAPI App Elector]
+        F[Routing Logic]
+        E -- Routes request to --> G((Main Model Service))
+        E -- Routes request to --> H((Canary Model Service))
+        F -- Decides route based on --> I[Traffic Splitting Strategy]
+    end
+
+    J[Client Application] --> K((Elector Service))
+    G -- Returns prediction to --> K
+    H -- Returns prediction to --> K
+    K -- Returns aggregated response to --> J
+
+    style A fill:#f9f,stroke:#333,stroke-width:2px
+    style C fill:#ccf,stroke:#333,stroke-width:2px
+    style E fill:#9cf,stroke:#333,stroke-width:2px
+```
 
 ## Project Overview
 
