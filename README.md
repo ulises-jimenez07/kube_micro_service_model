@@ -7,13 +7,13 @@ This repository contains code and configuration for deploying machine learning m
 graph LR
     subgraph Main Model
         A[FastAPI App Main Model]
-        B[GaussianNB Model]
+        B[Random Forest Model]
         A -- Predicts using --> B
     end
 
     subgraph Canary Model
         C[FastAPI App Canary Model]
-        D[GaussianNB Model Variant]
+        D[Gaussian NB Model]
         C -- Predicts using --> D
     end
 
@@ -74,8 +74,8 @@ The project uses Google Cloud Artifact Registry for container image storage and 
 
 This project uses the Iris dataset to demonstrate ML model deployment:
 
-1. **Main Model (GaussianNB)**: The primary model for Iris classification
-2. **Canary Model (GaussianNB with different random state)**: A model version for comparison
+1. **Main Model (Random Forest)**: The primary model for Iris classification using RandomForestClassifier with 100 estimators
+2. **Canary Model (Gaussian Naive Bayes)**: An alternative model using GaussianNB for comparison and A/B testing
 
 Both models predict the species of an iris flower based on four measurements:
 
