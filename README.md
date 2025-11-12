@@ -111,7 +111,7 @@ gcloud compute instances create ml-deployment-vm \
   --project=$PROJECT_ID \
   --zone=$LOCATION-a \
   --machine-type=e2-standard-4 \
-  --image-family=ubuntu-2004-lts \
+  --image-family=ubuntu-2204-lts \
   --image-project=ubuntu-os-cloud \
   --boot-disk-type=pd-ssd \
   --boot-disk-size=50GB \
